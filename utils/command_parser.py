@@ -70,4 +70,12 @@ def command_parser():
     parser.add_argument('--backbone_train_epoch', type=int, default=-1, \
                         help='How many epochs to train the backbone when evaluating compressors')
 
+    # DISC-benchmark run control (ICLR 2027 rebuttal port; defaults keep the original behaviour)
+    parser.add_argument('--n_iters', type=int, default=-1, help='outer iterations (default: config training.n_iters)')
+    parser.add_argument('--eval_every', type=int, default=-1, help='eval/checkpoint interval (default: config)')
+    parser.add_argument('--num_eval', type=int, default=-1, help='monitor eval nets per eval (0 = skip in-loop eval)')
+    parser.add_argument('--eval_train_epoch', type=int, default=-1, help='epochs per monitor eval (default: config)')
+    parser.add_argument('--gen_queries', type=int, default=64, help='real images per class in the generalization loss (original: 64)')
+    parser.add_argument('--save_dir', type=str, default='', help='checkpoint + exported synthetic sets; resumes from ckpt_latest.pt')
+
     return parser

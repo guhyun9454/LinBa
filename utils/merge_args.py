@@ -61,6 +61,16 @@ def merge_args(args, config):
     if args.inner_momentum >= 0:
         setattr(config.bptt_optim, 'momentum',  args.inner_momentum)
 
+    # DISC-benchmark run control
+    if getattr(args, 'n_iters', -1) > 0:
+        setattr(config.training, 'n_iters', args.n_iters)
+    if getattr(args, 'eval_every', -1) > 0:
+        setattr(config.training, 'eval_every', args.eval_every)
+    if getattr(args, 'num_eval', -1) >= 0:
+        setattr(config.evaluation, 'num_eval', args.num_eval)
+    if getattr(args, 'eval_train_epoch', -1) > 0:
+        setattr(config.evaluation, 'train_epoch', args.eval_train_epoch)
+
     # add device
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     config.device = device

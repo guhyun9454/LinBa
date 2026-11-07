@@ -248,6 +248,12 @@ def get_dataset_config(dataset):
         im_size = 64
         n_class = 200
 
+    elif dataset.startswith('ImageNet_'):
+        # DISC ImageNet subsets (10 classes), preprocessed by DISC's own loader; see utils/disc_imagenet.py
+        channel = 3
+        im_size = int(os.environ.get('LINBA_RES', '128'))
+        n_class = 10
+
     else:
         exit('unknown dataset: %s'%dataset)
 
@@ -255,6 +261,10 @@ def get_dataset_config(dataset):
 
 
 def get_dataset(dataset, data_path, zca=False, manual_size=None, use_val=True, validation_ratio=0, test_on_train=False):
+
+    if dataset.startswith('ImageNet_'):
+        from utils.disc_imagenet import load_disc_imagenet
+        return load_disc_imagenet(dataset, validation_ratio=validation_ratio)
     if dataset == 'MNIST':
         channel = 1
         im_size = (28, 28)

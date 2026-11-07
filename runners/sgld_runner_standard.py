@@ -103,7 +103,8 @@ def train(rank, world_size, config, args):
     channel, im_size, train_n_classes, test_n_classes, dst_train, dst_test = get_dataset(
         config.dataset.name,
         config.dataset.data_path,
-        zca=args.zca==1
+        zca=args.zca==1,
+        validation_ratio=args.validation_ratio,
     )
     train_images_all, train_labels_all, train_indices_class = organize_dst(
                                                                   dst_train,
@@ -170,13 +171,21 @@ def train(rank, world_size, config, args):
 
     sys.stdout.flush()
 
+    # Resume (DISC-benchmark port): compressor + optimizer + iteration + RNG
+    start_it = 0
+    if args.save_dir:
+        os.makedirs(args.save_dir, exist_ok=True)
+        start_it = load_checkpoint(args.save_dir, compressor, optimizer_compressor)
+
     # Train for N iterations
     new_lr = optimizer_compressor.param_groups[0]['lr']
-    for it in range(config.training.n_iters):
-        # evaluate at intervals
-        if rank == 0 and it in eval_intervals:
-            if hasattr(config, 'save'):
-                save_model(compressor)
+    for it in range(start_it, config.training.n_iters + 1):
+        is_eval_it = (it in eval_intervals) or (it == config.training.n_iters)
+        # checkpoint + export at intervals and at the end (skip the iteration we just resumed at)
+        if rank == 0 and is_eval_it and args.save_dir and not (it == start_it and start_it > 0):
+            save_checkpoint(args.save_dir, compressor, optimizer_compressor, it, config)
+        # evaluate at intervals (in-loop monitor; num_eval 0 = skip)
+        if rank == 0 and is_eval_it and config.evaluation.num_eval > 0:
             print('Evaluating... Learning rate: ', new_lr, 'Iteration:', it)
             print('Downsample scale: ', compressor.downsample_scale)
             compressor_set = [copy.deepcopy(compressor_bptt.compressor)]
@@ -195,9 +204,12 @@ def train(rank, world_size, config, args):
                     intervention=[test_intervention, _prob]
                 )
 
+        if it == config.training.n_iters:
+            break
+
         # Get data for generalization batch loss
         task_indices        = get_task_indices(train_n_classes, args.task_sampler_nc)
-        generalization_data = get_generalization(compressor_dset, task_indices)
+        generalization_data = get_generalization(compressor_dset, task_indices, n_queries=args.gen_queries)
 
         # Optimize compressor_bptt model with inner loops
         optimizer_compressor.zero_grad()
@@ -246,3 +258,49 @@ def save(compressor, dataset):
         {'compressor': compressor.state_dict()},
         'saves/' + compressor.name + '_' + dataset + '_compressor.pt'
     )
+
+
+"""
+  DISC-benchmark port: checkpoint / export helpers
+"""
+def export_synset(compressor):
+    """Stored parameters of the synthetic set (what counts toward the budget) + labels. Decoding, as in
+    get_compressors(): x = coeffs @ basis -> (N, C, H/ds, W/ds) -> bilinear x ds (align_corners=False)."""
+    return {'basis': compressor.basis.weight.detach().cpu().clone(),      # (K, C*h*w)
+            'coeffs': compressor.imgs.weight.detach().cpu().clone(),      # (ipc*num_classes, K), class-major
+            'labels': compressor.labs.detach().cpu().clone(),
+            'channel': compressor.channel, 'stored_hw': list(compressor.im_size),
+            'downsample_scale': compressor.downsample_scale}
+
+
+def save_checkpoint(save_dir, compressor, optimizer, it, config):
+    syn = export_synset(compressor)
+    n_floats = sum(p.numel() for p in compressor.parameters())
+    meta = dict(it=it, n_basis=compressor.n_basis, ipc=compressor.ipc, downsample_scale=compressor.downsample_scale,
+                stored_floats=int(n_floats), dataset=config.dataset.name)
+    syn['meta'] = meta
+    torch.save(syn, os.path.join(save_dir, 'synset_it%06d.pt' % it))
+    state = {'compressor': compressor.state_dict(), 'optimizer': optimizer.state_dict(), 'it': it, 'meta': meta,
+             'rng': {'torch': torch.get_rng_state(), 'numpy': np.random.get_state(), 'random': random.getstate(),
+                     'cuda': torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None}}
+    tmp = os.path.join(save_dir, 'ckpt_latest.pt.tmp')
+    torch.save(state, tmp)
+    os.replace(tmp, os.path.join(save_dir, 'ckpt_latest.pt'))
+    print('[ckpt] it=%d saved (stored floats %d, %d synthetic images)' % (it, n_floats, len(syn['labels'])))
+    sys.stdout.flush()
+
+
+def load_checkpoint(save_dir, compressor, optimizer):
+    path = os.path.join(save_dir, 'ckpt_latest.pt')
+    if not os.path.exists(path):
+        return 0
+    state = torch.load(path, map_location='cpu')
+    compressor.load_state_dict(state['compressor'])
+    optimizer.load_state_dict(state['optimizer'])
+    rng = state.get('rng', {})
+    if rng:
+        torch.set_rng_state(rng['torch']); np.random.set_state(rng['numpy']); random.setstate(rng['random'])
+        if rng.get('cuda') is not None and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(rng['cuda'])
+    print('[resume] from it=%d (%s)' % (state['it'], path))
+    return int(state['it'])
