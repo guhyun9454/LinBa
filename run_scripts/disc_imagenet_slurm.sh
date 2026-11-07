@@ -47,6 +47,7 @@ if [ "$STAGE" = "train" ]; then
   fi
   # 2) official LinBa training (resumes from $SAVE/ckpt_latest.pt)
   cd "$LINBA" || exit 3
+  export PYTHONPATH=$LINBA  # srcs/main.py imports utils/, runners/ from the repo root
   $PY -u srcs/main.py --note disc --backbone_name ConvNetD5 --config compressors_bptt_interventions.yml \
     --ipc 0.5 --compressor_optimizer SGD --bptt_inner_steps $INNER --inner_optimizer SGD --inner_momentum 0.9 \
     --dataset ImageNet_${S} --task_sampler_nc 10 --compressor_minibatch_size $MB --n_basis 16 \
