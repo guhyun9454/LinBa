@@ -15,3 +15,4 @@ compressor_vis/*
 *.pdf
 *.png
 *.acc
+__pycache__/
